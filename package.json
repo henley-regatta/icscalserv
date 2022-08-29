@@ -1,0 +1,16 @@
+{
+    "name"      :   "icscalserv",
+    "version"   :   "0.0.1",
+    "main"      :   "calendarserver.js",
+    "description":  "Lightweight recent-events calendar server",
+    "keywords"  :   [ "ical", "json", "calendar", "server"],
+    "homepage"  :   "https://github.com/henley-regatta/icscalserv",
+    "author"    :   "Matthew Exley <henley-github@guided-naafi.org> (https://www.guided-naafi.org/)",
+    "license"   :   "Apache-2.0",
+    "repository":   { "type": "git",  "url": "https://github.com/henley-regatta/icscalserv.git"},
+    "dependencies": {
+        "rrule"     : "2.7.1",
+        "node-ical" : "0.15.1",
+        "async"     : "3.2.4"   
+    }
+}
