@@ -7,9 +7,6 @@
 //
 // Call as "node getandparseics.js" to execute
 // --------------------------------------------------------------------------
-// TODO Fix parsing errors on calendar data - nothing parsed from the UK public,
-//      some sort of comprehension error from personal calendar
-// --------------------------------------------------------------------------
 console.log(`${new Date(Date.now())} - getandparseics.js called`);
 // Import the environment definition file (JSON)
 // Interesting note: Omit the file extension (.json) and Node will first try a .JS allowing for
@@ -26,6 +23,7 @@ if(("undefined" === typeof cfgdata.calendarJSONFile) ||
 // Import the support modules.
 //  iCal format comprehender:
 // (nb: use the "node" version because it's got the fromURL handler.)
+// https://github.com/jens-maus/node-ical/
 var ical = require('node-ical');
 //  Calendar Repetition Rule comprehender:
 var rrule = require('rrule');
