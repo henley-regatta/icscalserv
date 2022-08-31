@@ -7,14 +7,17 @@
 //
 // Call as "node getandparseics.js" to execute
 // --------------------------------------------------------------------------
-console.log(new Date(Date.now()) + " - getandparseics.js called");
+// TODO Fix parsing errors on calendar data - nothing parsed from the UK public,
+//      some sort of comprehension error from personal calendar
+// --------------------------------------------------------------------------
+console.log(`${new Date(Date.now())} - getandparseics.js called`);
 // Import the environment definition file (JSON)
 // Interesting note: Omit the file extension (.json) and Node will first try a .JS allowing for
 // future options. But it'll still read the .json if it doesn't find it....
 var cfgdata = require('./configdata');
 
 //Quick check and bang-out if we don't have the data we need
-if(("undefined" === typeof cfgdata.CombinedCalendarFileName) ||
+if(("undefined" === typeof cfgdata.calendarJSONFile) ||
    ("undefined" === typeof cfgdata.calendars)) {
    console.err("Configuration data not loaded - corrupt or incomplete configdata.json file");
    process.exit(1);
@@ -30,60 +33,74 @@ var rrule = require('rrule');
 var fs = require('fs');
 //  HTTPS support (Google requires this)
 var https = require('https');
+const { all } = require('async');
 // ASync Coordination Module
-var async = require('async');
+//var async = require('async');
+//const { exit } = require('process');
+//const { isBoxedPrimitive } = require('util/types');
 
 //Define the globvars we need from the loaded configuration
 var oldestEventAge = new Date(Date.now() - (cfgdata.MaxEventLookBackDays * 86400 * 1000));
 var newestEventAge = new Date(Date.now() + (cfgdata.MaxEventLookAheadDays * 86400 * 1000));
 
 //This is the data structure we're building - a list of events from all retrieved calendars
+//Normally we'd check we've got events in here before writing an update, but see also below:
 var combinedCalendarData = [];
 
-// MCE 2021-01-20 - COVID19 means lots of events being postponed/cancelled but the stub still
-//                  existing. Code below meant if all events were cancelled, it was interpreted
-//                  as "There is a problem reading data" and the local file wasn't written.
-//                  ...and so the Community Centre has been running "ghost events" for weeks now...
-//                 TO FIX THIS: We'll just put a marker var here which says how many calendars
-//                              we've actually read, and if that's non-zero we'll write the file
-//                              out anyway. Even if it's empty.
+// We may retrieve calendars that DONT'T contain any active events; read and parse will update
+// but no total events will be retrieved. So we WOULD want to write the output file in this case 
+// even though it's blank. We need to track how many calendars we've successfully processed:
 var countOfCalendarsRetrieved = 0;
 
-async.forEach(cfgdata.calendars,
-           //Per-item processing block (called asynchronously for each element in the workling list
-           function(item, callback) {
-                console.log("Processing Calendar: " + item.Name);
-                icalGrabberWrapper(item, function(item, eventData) {
-                    console.log("Extracting Events from calendar " + item.Name);
-                    pushCalEventsToGlobVar(extractEventsFromCal(eventData, item.Index));
-                    callback(); //must be called AFTER the work has completed on the item, hence in this callback
-                });
-           },
-           //Final callback, called after all async per-item tasks indicate complete via their callback
-           function(err) {
-                console.log("Retrieve Tasks Complete");
-                console.log("Total number of events in combinedCalendar: " + combinedCalendarData.length);
-                if(err) {
-                    console.log("Error processing calendars, exiting");
-                } else {
-                    processCompletedEventData();
-                    console.log(new Date(Date.now()) + " - getandparseics.js complete");
-                }
-            }
-
-);
-
+//This is the master function, which has to be Async because everything else under it is async.
+async function main() {
+    await processCalendars(cfgdata.calendars)
+}
+main().catch(console.log)
 
 //
 // NORMAL SCRIPT EXIT POINT
 //
+
+// ---------------------------------------------------------------------------------------------------------
+async function processCalendars(cals) {
+    calProcessing = cals.map(function(cal){
+        return ical.async.fromURL(cal.URL).catch(err => {console.log(`RETRIEVE ERROR FOR ${cal.Name} : ${err.message}`)})
+    })
+    
+    calNames = cals.map(cal => cal.Name)
+    Promise.all(calProcessing).then((calEvents) => {
+        for(let i = 0; i < calEvents.length; i++) {
+            if(calEvents[i] === undefined || calEvents[i]  == null) {
+                console.log(`WARNING - No calendar data returned for ${calNames[i]}`)
+            } else {
+                var k = Object.keys(calEvents[i])
+                if(k.length >= 0 && k[0].toLowerCase().includes("html")) {
+                    console.log(`WARNING - Response contained no calendar data for ${calNames[i]}`)
+                } else {
+                    //HAPPY PATH
+                    countOfCalendarsRetrieved += 1;
+                    console.log(`${calNames[i]} returned ${k.length} elements`)
+                    const mEvents = extractEventsFromCal(calEvents[i],calNames[i])
+                    for(var ev in mEvents) {
+                        if(mEvents.hasOwnProperty(ev)) {
+                            combinedCalendarData.push(mEvents[ev])
+                        }
+                    }
+                }
+            }
+        }
+    }).finally(() => {
+        processCompletedEventData();
+    });
+}
 
 //
 // ------------------------------------------------------------------------------------------
 // I'm beginning to hate having to work-around Node's asynchronicity
 function processCompletedEventData() {
 
-    var outputJSONFile = cfgdata.CombinedCalendarJSONFile;
+    var outputJSONFile = cfgdata.calendarJSONFile;
     var backupJSONFile = outputJSONFile + ".previous";
 
     //SANITY CHECK - do NOT do file IO if we've got no new event data to process...
@@ -95,43 +112,15 @@ function processCompletedEventData() {
                     + combinedCalendarData.length + " events will be written to the local file.")
         if(fs.existsSync(backupJSONFile)) { fs.unlinkSync(backupJSONFile); }
         if(fs.existsSync(outputJSONFile)) { fs.renameSync(outputJSONFile,backupJSONFile); }
-
         fs.writeFileSync(outputJSONFile,JSON.stringify(combinedCalendarData),{});
         console.log("Wrote " + combinedCalendarData.length + " events to JSON file " + outputJSONFile);
     }
-
 }
 
 //
 // ------------------------------------------------------------------------------------------
-// Don't really understand why, but doing this as a function makes the sync. code seem to work
-function pushCalEventsToGlobVar(someEvents) {
-    console.log("Adding " + someEvents.length + " Events to combinedData");
-    for ( var ev in someEvents ) {
-        if(someEvents.hasOwnProperty(ev)) {
-            combinedCalendarData.push(someEvents[ev]);
-        }
-    }
-}
-
 //
-// ------------------------------------------------------------------------------------------
-// It's Node: if you want to customise a callback, wrap it all up a bit...
-function icalGrabberWrapper(item, callBack) {
-    ical.fromURL(item.URL, {}, function(err, data) {
-        if( err ) {
-            console.log("Error retrieving calendar " + item.Name + ":" + err);
-            callBack(item,"");
-        } else {
-            countOfCalendarsRetrieved += 1;
-            callBack(item,data);
-        }
-    });
-}
-//
-// ------------------------------------------------------------------------------------------
-//
-function extractEventsFromCal(data,reqZoneIndex) {
+function extractEventsFromCal(data,calName) {
     //Basic comprehension check:
     var matchingEvents = [];
     var numEntries = 0;
@@ -143,7 +132,8 @@ function extractEventsFromCal(data,reqZoneIndex) {
             if(ev.type === 'VEVENT'
                && ev.hasOwnProperty('start')) {
                numMatches += 1;
-               var evDets = {       id : ev.uid,
+               var evDets = {    cal   : calName,
+                                 id    : ev.uid,
                                  title : ev.summary,
                               location : ev.location,
                               start : ev.start };
@@ -155,12 +145,7 @@ function extractEventsFromCal(data,reqZoneIndex) {
                 } else {
                     evDets.duration = 0;
                 }
-                //Check that the location STARTS with the Index number, append if not
-                //(check+balance for later relay processing
-                if(!(ev.location.substring(0,1) == reqZoneIndex)) {
-                    console.log("Appending |" + reqZoneIndex + "|")
-                    evDets.location = reqZoneIndex + " "  + ev.location;
-                }
+               
                 //MCE 2017-12-28 - Handle EXDATE exclusions if they exist. Object ev.exdate may be a
                 //                 singleton (single-instance with a "params" and "val") or an array of
                 //                 params/val objects. Or may not exist at all.
@@ -210,6 +195,7 @@ function extractEventsFromCal(data,reqZoneIndex) {
             }
         }
     }
+    //console.log("extractEventsFromCal - INFO - " + calName + " contained " + numEntries + " entries; " + numMatches + " are events")
     return matchingEvents
 }
 //
