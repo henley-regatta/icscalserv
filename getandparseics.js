@@ -33,11 +33,6 @@ var rrule = require('rrule');
 var fs = require('fs');
 //  HTTPS support (Google requires this)
 var https = require('https');
-const { all } = require('async');
-// ASync Coordination Module
-//var async = require('async');
-//const { exit } = require('process');
-//const { isBoxedPrimitive } = require('util/types');
 
 //Define the globvars we need from the loaded configuration
 var oldestEventAge = new Date(Date.now() - (cfgdata.MaxEventLookBackDays * 86400 * 1000));
@@ -57,12 +52,13 @@ async function main() {
     await processCalendars(cfgdata.calendars)
 }
 main().catch(console.log)
+/* --  NORMAL SCRIPT EXIT POINT -- */
 
-//
-// NORMAL SCRIPT EXIT POINT
-//
-
+//-
 // ---------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
+//
 async function processCalendars(cals) {
     calProcessing = cals.map(function(cal){
         return ical.async.fromURL(cal.URL).catch(err => {console.log(`RETRIEVE ERROR FOR ${cal.Name} : ${err.message}`)})
@@ -133,17 +129,18 @@ function extractEventsFromCal(data,calName) {
                && ev.hasOwnProperty('start')) {
                numMatches += 1;
                var evDets = {    cal   : calName,
-                                 id    : ev.uid,
+                                 //id    : ev.uid,
                                  title : ev.summary,
                               location : ev.location,
                               start : ev.start };
                 //Determine duration (in minutes) - AFTER CHECKING THERE IS AN END TIME!
                 if(ev.hasOwnProperty('start') && ev.hasOwnProperty('end')) {
                     var duration = ev.end.getTime() - ev.start.getTime();
-                    evDets.duration = duration / 1000;
+                    //evDets.duration = duration / 1000;
                     evDets.end = ev.end;
                 } else {
-                    evDets.duration = 0;
+                    //evDets.duration = 0;
+                    evDets.end = ev.start
                 }
                
                 //MCE 2017-12-28 - Handle EXDATE exclusions if they exist. Object ev.exdate may be a
