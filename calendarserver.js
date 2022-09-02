@@ -111,7 +111,9 @@ var calData = {
     lastReq: 0,
     fileLastModified: 0,
     fileLastLoaded: 0,
-    numEvents : 0 
+    numEvents : 0,
+    numCals : 0,
+    calNames : []      //needed for parsing output into blocks
 }
 
 /*************************************************************************************
@@ -175,7 +177,6 @@ function serveCalData(req,res,timeSpec) {
     dLB = new Date(Date.now() - defaultServeLookBack);
     dLF = new Date(Date.now() + defaultServeLookAhead);
 
-
     //reset to day boundaries (used as default):
     var timeCriteria = "DEFAULT";
     var earliest = new Date(dLB.getFullYear(),dLB.getMonth(),dLB.getDate(),00,00,00,00);
@@ -203,7 +204,36 @@ function serveCalData(req,res,timeSpec) {
     matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
     ts = dayjs().format();
     console.log(`${ts} - INFO - returning ${matchingEvents.length} events matching ${timeCriteria}, between ${earliest} and ${latest}`);
-    res.end(JSON.stringify(matchingEvents,null,1));
+    res.end(JSON.stringify(reformatEventsForSerialisation(matchingEvents),null,1));
+}
+
+//
+// ------------------------------------------------------------------------------
+// It's easier for an endpoint to consume if we split the events by calendar
+// (and we'd like a header section, and we can reduce the size of the output with trimming)
+function reformatEventsForSerialisation(ev) {
+    var outStruct = {
+        "time" : new Date(Date.now()),
+        //TODO - would be nice to get weather and put it in here, wouldn't it?
+        "tempDegrees" : 22,
+        "weatherForecast" : "showers",
+        "cals" : new Object()
+    }
+    for(n in calData.calNames) [
+        outStruct.cals[calData.calNames[n]] = []
+    ]
+    for(i in ev) {
+        let e = ev[i];
+        //Shorten the data, push to cals struct
+        outStruct.cals[e.cal].push({
+            "title" : e.title, 
+            "start" : e.start, 
+            "end"   : e.end,
+            "location" : e.location
+         });
+    }
+    
+    return outStruct;
 }
 
 
@@ -241,6 +271,8 @@ function refreshCalData() {
                     process.exit(1)
                 }
                 //Update our metadata
+                calData.calNames = getCalNames(calevents)
+                calData.numCals = calData.calNames.length;
                 calData.numEvents = calevents.length;
                 calData.fileLastLoaded = new Date(Date.now());
                 console.log(`${ts} - INFO - Calendar re-loaded. ${calData.numEvents} events available`);
@@ -249,6 +281,17 @@ function refreshCalData() {
             console.log(`${ts} - INFO - Calendar Data file hasn't changed; Events not refreshed`);
         }
     });
+}
+
+// helper function during refresh.
+function getCalNames(caldata) {
+    var cNames = []
+    for(var e in caldata) {
+        if(!cNames.includes(caldata[e].cal)) {
+            cNames.push(caldata[e].cal);
+        }
+    }
+    return cNames;
 }
 
 //We're mostly OK with the to-JSON / from-JSON conversions but we *do* need to turn
