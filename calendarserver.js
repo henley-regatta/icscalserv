@@ -74,9 +74,6 @@ var dayjs = require('dayjs')
 //Process support.
 const { emitWarning } = require('process');
 
-//Master Operation Control Var:
-//(Should not be user-modified)
-var haveCurrentCalFile = false;
 //Used to define how often this script should check for a new data file
 //(to limit re-reads). Default = 10 minutes
 var fileCheckAge = 10*60*1000;
@@ -114,6 +111,12 @@ var calData = {
     numEvents : 0,
     numCals : 0,
     calNames : []      //needed for parsing output into blocks
+}
+
+//Set a default if not found in the config file for whether the output should be compressed 
+//or not
+if(cfgdata.compactOutput === "undefined") {
+    cfgdata.compactOutput = true;
 }
 
 /*************************************************************************************
@@ -201,10 +204,12 @@ function serveCalData(req,res,timeSpec) {
         earliest     = oldestEventAge;
         latest       = newestEventAge;
     }
-    matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
-    ts = dayjs().format();
+    let matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
+    let ts = dayjs().format();
     console.log(`${ts} - INFO - returning ${matchingEvents.length} events matching ${timeCriteria}, between ${earliest} and ${latest}`);
-    res.end(JSON.stringify(reformatEventsForSerialisation(matchingEvents),null,1));
+    //make the output human or machine readable?
+    let squeeze = cfgdata.compactOutput ? 0 : 2
+    res.end(JSON.stringify(reformatEventsForSerialisation(matchingEvents),null,squeeze));
 }
 
 //
