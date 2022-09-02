@@ -29,22 +29,24 @@
 var cfgdata = require('./configdata');
 
 //Quick check and bang-out if we don't have the data we need
-if(("undefined" === typeof cfgdata.CombinedCalendarFileName) ||
-   ("undefined" === typeof cfgdata.calendars)) {
+if(("undefined" === typeof cfgdata.calendarJSONFile) ||
+   ("undefined" === typeof cfgdata.calendars) ||
+   ("undefined" === typeof cfgdata.ServerListenPort)) {
    console.err("Configuration data not loaded - corrupt or incomplete configdata.json file");
    process.exit(1);
 }
 
 // Post-process the variables for convenience, especially with that pesky milliseconds requirement
 
-//Maxmimum look-back for Event Data
+//Maximum look-back for Event Data
+//(convert to JS Millis)
 var maxLookBack = cfgdata.MaxEventLookBackDays * 86400 * 1000; 
 //Used to define how far in the future we'll show events
 var maxLookAhead = cfgdata.MaxEventLookAheadDays * 86400 * 1000;
-//Used to define an "Active" Event - Time Window BEFORE event starts that event is
-var preEventStartWarmupPeriod= cfgdata.PreEventHeatingTimeHrs * 3600 * 1000;
-//Time before END of an event to consider it closed. 
-var preEventEndCooldownPeriod= cfgdata.PreEventEndCooldownTimeHrs * 3600 * 1000;
+
+//DEFAULT time-window to serve events if no parameters supplied
+var defaultServeLookBack = 0 //"Now"
+var defaultServeLookAhead = 2 * 86400 * 1000 // 2 days
 /*
 END OF GLOBAL VARIABLES
 -----------------------
@@ -67,6 +69,10 @@ var url = require('url');
 var path = require('path');
 //utility functions:
 var util = require('util');
+//Date formatting support
+var dayjs = require('dayjs')
+//Process support.
+const { emitWarning } = require('process');
 
 //Master Operation Control Var:
 //(Should not be user-modified)
@@ -80,9 +86,9 @@ var oldestEventAge = new Date(Date.now() - maxLookBack);
 var newestEventAge = new Date(Date.now() + maxLookAhead);
 
 // URI for Dataretrieve:
-var dataRequestURI = "/CalDataJSON";
+var dataRequestURI = "/JSON";
 // Metadata response (to check health)
-var metaDataRequestURI = "/CalMetaJSON";
+var metaDataRequestURI = "/Health";
 
 //Used to determine the filetype sent back:
 var mimeTypes = {
@@ -105,139 +111,142 @@ var calData = {
     lastReq: 0,
     fileLastModified: 0,
     fileLastLoaded: 0,
-    relayUpdateLastReq: 0,
     numEvents : 0 
 }
 
 /*************************************************************************************
 Master Program Logic goes:
 --------------------------
- 0) Read Calendar Data from local file
+ 0) Read Calendar Data from JSON Store
  1) Start a SERVER listening for HTTP on port <srvListenPort>
  2) ON REQUEST:
-    a) If for anything other that /CalDataJSON:
-         - Serve up a defined display webpage with embedded javascript for retrieve
-    b) If for /CalDataJSON:
-         - Check for valid cached internal event list. Return as JSON if available
-         - Else, request a refresh and return *that*
+    a) If for $dataRequestURI:
+        - Parse parameters for timewindow (if supplied), otherwise use defaults
+        - Supply JSON response based on timewindow of data loaded from file
+    b) If for $metaDataRequestURI:
+        - Serve JSON response of internal values in $calData
+    c) If for anything else 
+        - 404 not found
 **************************************************************************************/
+
 //Force caldata re-read on start:
 //(KEEP - otherwise 1st call will come back blank due to async refresh)
 refreshCalData();
+//Setup async refresh every fileCheckAge millis:
+setInterval(refreshCalData,fileCheckAge);
 
 //MAIN LOOP:
 var calServ = http.createServer(function(req,res){
     //Get the request URL and act accordingly:
     var locReq = url.parse(req.url).pathname;
     var timeSpec = url.parse(req.url).search;
-    calData.lastReq = new Date(Date.now());
-    console.log(calData.lastReq + " Received request for URL: " + req.url); 
+    calData.lastReq = dayjs().format();
+    console.log(`${calData.lastReq} - INFO - request for ${req.url}`); 
     if(locReq == dataRequestURI) {
-        //This is a request for the parsed calendar data stream
-        res.setHeader('Content-Type', 'application/json');
-        //Check for valid current data; queue a refresh request if not
-        //reset age counter since it might be a while since our last request.
-        //fileAgeThreshold = new Date(Date.now()- fileCheckAge);
-        calData.checkAgeThreshold = new Date(Date.now()-fileCheckAge);
-        //reset event search window markers for same reason
-        oldestEventAge = new Date(Date.now() - maxLookBack);
-        newestEventAge = new Date(Date.now() + maxLookAhead);
-        //Check: If data age older than 10 mins we might need to refresh
-        if(calData.checkTime < calData.checkAgeThreshold || calData.numEvents < 1 ) {
-            calData.checkTime = new Date(Date.now());
-            refreshCalData();
-        }
-        //Sub-categorise the output date range, if supplied
-        if(timeSpec == "?today") {
-            console.log("Asked for TODAYS (remaining) events");
-            var earliest = new Date(Date.now());
-            var latest = new Date(earliest.getFullYear(),earliest.getMonth(),earliest.getDate(),23,59,59,999);
-            res.end(JSON.stringify(eventsWithinDateRange(calevents,earliest,latest),null,3));
-        } else if(timeSpec == "?activeEvents") {
-            console.log("Asked for ACTIVE events");
-            res.end(JSON.stringify(eventsActiveNow(calevents),null,3));
-        } else if(timeSpec == "?nextEventByLocation") {
-            console.log("Asked for NEXT EVENT BY LOCATION");
-            res.end(JSON.stringify(nextEventByLocation(calevents),null,3));
-        } else {
-            console.log("Returning ALL events...");
-            res.end(JSON.stringify(calevents,null,3));
-        }
-        //Book-keeping time: For Metadata / Healthcheck reasons we want to record
-        //the request time IF the requestor is our relay update script
-        var reqHost = req.headers['host'];
-        var reqUA = req.headers['user-agent'];
-        if(reqHost.startsWith('localhost') && reqUA.startsWith('caltriggerrelays')) {
-            console.log(' -> Request was from Relay Update Script');
-            calData.relayUpdateLastReq = calData.lastReq;
-        }
+        //res.setHeader('Content-Type', 'application/json');
+        //res.end(JSON.stringify(calevents));
+        serveCalData(req,res,timeSpec)
     } else if(locReq == metaDataRequestURI) {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(calData,null,3));
     } else {
-        //This is some other request we'll serve as a static file from the $localHTMLroot dir
-        //Default to the index page:
-        var filename = path.join(cfgdata.HTMLDirectory, "/index.html");
-        if(locReq.length > 1) {
-            filename = path.join(cfgdata.HTMLDirectory, locReq);
-        }
-
-        var fStats;
-        try {
-            fStats = fs.lstatSync(filename); //throws if file does not exist:
-        } catch (e) {
-            console.log("Request for missing file: " + filename);
-            res.writeHead(404, {'Content-Type': 'text/plain'});
-            res.end("404 File Not Found\n");
-            return;
-        }
-        if (fStats.isFile()) {
-            var mimeType = mimeTypes[path.extname(filename).split(".")[1]];
-            res.writeHead(200,{'Content-Type':mimeType});
-            var fileStream = fs.createReadStream(filename);
-            fileStream.pipe(res);
-        } else {
-            res.writeHead(403, {'Content-Type': 'text/plain'});
-            res.end("403 Forbidden\n");
-        }
-
+        // Didn't recognise the request, 404 it.
+        console.log(`${calData.lastreq} - WARN - Request for unknown path ${locReq}`)
+        res.writeHead(404, {'Content-Type': 'text/plain'});
+        res.end(`404 File Not Found (${locReq}). Supported endpoints:\n\t${dataRequestURI}\n\t${metaDataRequestURI}\n`);
+        return;
     }
 });
 calServ.listen(cfgdata.ServerListenPort);
-console.log('Server listening:' + calServ.listening);
-console.log('Listener URL: http://localhost:' + cfgdata.ServerListenPort + '/');
+ts = dayjs().format();
+console.log(`${ts} - INFO - Server listening: ${calServ.listening}`);
+console.log(`${ts} - INFO - Listener URL:     http://localhost:${cfgdata.ServerListenPort}/`);
+
+//
+// ------------------------------------------------------------------------------
+//
+function serveCalData(req,res,timeSpec) {
+    //This is a request for the parsed calendar data stream
+    res.setHeader('Content-Type', 'application/json');
+    //reset event search window markers since it might have been a while since last request
+    oldestEventAge = new Date(Date.now() - maxLookBack);
+    newestEventAge = new Date(Date.now() + maxLookAhead);
+
+    dLB = new Date(Date.now() - defaultServeLookBack);
+    dLF = new Date(Date.now() + defaultServeLookAhead);
+
+
+    //reset to day boundaries (used as default):
+    var timeCriteria = "DEFAULT";
+    var earliest = new Date(dLB.getFullYear(),dLB.getMonth(),dLB.getDate(),00,00,00,00);
+    var latest   = new Date(dLF.getFullYear(),dLF.getMonth(),dLF.getDate(),23,59,59,59);
+    n = new Date(Date.now());
+    
+    //Sub-categorise the output date range, if supplied. If not supplied, use default range
+    if(timeSpec == "?today") {
+        timeCriteria = "TODAY";
+        earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),00,00,00,00); 
+        latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
+    } else if(timeSpec == "?tomorrow") {
+        timeCriteria = "TOMORROW";
+        earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
+        latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,23,59,59,999);
+    } else if(timeSpec == "?week") {
+        timeCriteria = "WEEK";
+        earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
+        latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+7,23,59,59,999);
+    } else if(timeSpec == "?fullrange") {
+        timeCriteria = "ALLEVENTS";
+        earliest     = oldestEventAge;
+        latest       = newestEventAge;
+    }
+    matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
+    ts = dayjs().format();
+    console.log(`${ts} - INFO - returning ${matchingEvents.length} events matching ${timeCriteria}, between ${earliest} and ${latest}`);
+    res.end(JSON.stringify(matchingEvents,null,1));
+}
 
 
 //Called to check whether data is required to be re-read, does so if
 //necessary
 // (NOTE: Now relies on external file / url retrieval)
 function refreshCalData() {
-    console.log('Checking state of cached data...');
-    fs.stat(cfgdata.CombinedCalendarJSONFile, function(err, stats) {
+    calData.checkTime = new Date(Date.now())
+    ts = dayjs().format()
+    console.log(`${ts} - INFO - Checking state of cached data...`);
+    calData.checkAgeThreshold = new Date(Date.now()-fileCheckAge);
+    fs.stat(cfgdata.calendarJSONFile, function(err, stats) {
         if(err) {
-            console.log('unable to stat calendar data file ', cfgdata.CombinedCalendarJSONFile)
-            return;
+            console.log(`${ts} - FATAL - unable to stat calendar data file: ${cfgdata.calendarJSONFile}`);
+            //This, is a problem. We need that data available.
+            process.exit(1);
         }  
         calData.fileLastModified = new Date(util.inspect(stats.mtime));
         if(calData.fileLastModified > calData.fileLastLoaded) {
             //File has been modified since we last read it, so re-read it
-            console.log('Calendar Data File modified since we last read it, re-reading');
-            try  {
-                //NOTE: Default require() behaviour is to cache objects on first load. 
-                //We need to circumvent this behaviour by forcing a cache expire. Hence the chicanery:
-                delete require.cache[require.resolve(cfgdata.CombinedCalendarJSONFile)];
-                calevents = []; //reset the object
-                calevents = turnStringTimesIntoDateObjects(require(cfgdata.CombinedCalendarJSONFile));
-            } catch (e) {
-                console.log('Error in JSON file ' + cfgdata.CombinedCalendarJSONFile + ' - ' + e);
-            }
-            //Update metadata to allow display:
-            calData.numEvents = calevents.length;
-            //Update reloaded time counter
-            calData.fileLastLoaded = new Date(Date.now());
-            console.log('Calendar data re-loaded. ' + calData.numEvents + ' total events');
+            console.log(`${ts} - INFO  - Calendar Data File modified since we last read it, re-reading`);
+            //NB - Require() Considered Harmful for non-static data...
+            fs.readFile(cfgdata.calendarJSONFile,(error,data) => {
+                if(error) {
+                    console.log(`${ts} - FATAL - Error reading file ${cfgdata.calendarJSONFile} : ${error}`);
+                    //This shouldn't happen and we can't continue so
+                    process.exit(1)
+                }
+                //We could read it, but can we parse it?
+                try {
+                    calevents = turnStringTimesIntoDateObjects(JSON.parse(data))
+                } catch (e) {
+                    console.log(`${ts} - FATAL - Error parsing ${cfgdata.calendarJSONFile} : ${e}`);
+                    //Again, this is non-recoverable so:
+                    process.exit(1)
+                }
+                //Update our metadata
+                calData.numEvents = calevents.length;
+                calData.fileLastLoaded = new Date(Date.now());
+                console.log(`${ts} - INFO - Calendar re-loaded. ${calData.numEvents} events available`);
+            });
         } else {
-            console.log("Calendar Data file hasn't changed; Returning existing data")
+            console.log(`${ts} - INFO - Calendar Data file hasn't changed; Events not refreshed`);
         }
     });
 }
@@ -256,68 +265,19 @@ function turnStringTimesIntoDateObjects(listOfEvents) {
 }
 
 //Extract from the total list of events those with a starttime AFTER the earliest time
-//or an endtime BEFORE the latest time
+//AND a starttime EARLIER than the latest time
+//(because End time might be zero / start-of-epoch for events without duration)
 function eventsWithinDateRange(listOfEvents,earliest,latest) {
     var matchingEvents = [];
-    console.log("\tSearching for events in range...");
-    console.log("\t\tSTARTS AFTER:   " + earliest);
-    console.log("\t\tFINISHES BEFORE:" + latest);
     for (var i in listOfEvents) {
-        var ev = listOfEvents[i];
-        if( (ev.start.getTime() >= earliest ) &&
-            (ev.end.getTime() <= latest ) ) {
-            matchingEvents.push(ev);
+        var evstart = listOfEvents[i].start 
+        if (evstart>=earliest && evstart<=latest) {
+           //console.log(`${evstart} is between ${earliest} and ${latest}`)
+            matchingEvents.push(listOfEvents[i]);
         }
     }
-    console.log("\tReturning " + matchingEvents.length + " matching events from " + listOfEvents.length + " available")
-    return matchingEvents;
+    //TODO: Sort by "start"
+    return matchingEvents.sort(function(a,b){return a.start - b.start});
 }
 
-//Inevitably there's a special case. In this case we need to work out "Active Events" for heating control purposes.
-//Definition of Active:  (START TIME - warmupTime) is before now
-//                       (END TIME - cooldownTime) is after now 
-// Noting that the desired return set is therefore made up of "current" events with an adjusted start/finish window
-//
-function eventsActiveNow(listOfEvents) {
-    var activeEvents = [];
-    var now = new Date(Date.now());
-    console.log("\tSearching for ACTIVE events:");
-    for (var i in listOfEvents) {
-        var ev = listOfEvents[i];
-        if( ((ev.start.getTime() - preEventStartWarmupPeriod) < now) &&
-            ((ev.end.getTime() - preEventEndCooldownPeriod) > now) ) {
-            activeEvents.push(ev);
-        }
-    }
-    console.log("\tReturning " + activeEvents.length + " matching events");
-    return activeEvents;
-}
-
-function nextEventByLocation(listOfEvents) {
-    var nextEventByLocation = new Object();
-    var now = new Date(Date.now());
-    for (var i in listOfEvents) {
-        var ev = listOfEvents[i];
-        //skip ALL events in past
-        if(ev['start'] < now) {
-            continue;
-        }
-        
-        //Initialise location if required
-        if(!(ev['location'] in nextEventByLocation)) {
-            nextEventByLocation[ev['location']] = ev;
-        }
-        //Otherwise, check whether it's earlier than stored or not
-        if(ev['start'] < nextEventByLocation[ev['location']]['start']) {
-            nextEventByLocation[ev['location']] = ev;
-        }
-    }
-    //Now, because we've made a rod for our own backs, turn this back into an array
-    var matchingEvents = [];
-    for(loc in nextEventByLocation) {
-        matchingEvents.push(nextEventByLocation[loc]);
-    }
-    console.log("\t\Returning " + matchingEvents.length + " events by location");
-    return matchingEvents;
-}
 
