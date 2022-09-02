@@ -10,6 +10,7 @@
     "repository":   { "type": "git",  "url": "https://github.com/henley-regatta/icscalserv.git"},
     "dependencies": {
         "rrule"     : "2.7.1",
-        "node-ical" : "0.15.1"
+        "node-ical" : "0.15.1",
+        "dayjs"     : "1.11.5"
     }
 }
