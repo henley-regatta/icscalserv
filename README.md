@@ -15,23 +15,26 @@ single database. The point of this is to provide a "lightweight"
 recent-event JSON source suitable for easy consumption by a local
 endpoint, potentially one with limited memory/storage resources.
 
-Eventually this will be provided by a single node-hosted server process
-but for development purposes it's split into a "retriever"
-(`getandparseics.js`) and a "server" (`calendarserver.js`):
+This version now has an "integrated" server in `calendarserver.js` that is 
+capable of retrieving the calendars from the URLS, parsing them itself,
+and serving them.
 
-  * `getandparseics.js` is responsible for retrieving the calendars, parsing
-them (interpreting repeating events, exclusions etc), filtering them into
-the timewindow of interest, and storing the result as a (compact) JSON
-data structure
+For legacy reasons there's also a standalone calendar retriever in
+`getandparseics.js` which will *only* retrieve the configured calendars
+and parse them into a local JSON file; this was originally the input to
+the server program for the previous implementation and may be useful to
+someone else but has outlived it's utility in the current implementation.
 
-  * `calendarserver.js` is (currently) responsible for serving out the
-  events as JSON responses to a simple query format; just about the only
-  specification it'll take as input at the minute is a simple days-before
-  and days-after "now". Data served is taken from the output of the
-  retriever and only augmented with the sub-period, data age and
-  request-time data. This is to allow a querying device to know both what
-  the current epoch is and how current the data retrieved is. Handy if the
-  device has no RTC and limited memory....
+The server is (sort-of) self documenting in as much as it issues an error
+message if an unknown URI is requested. However it doesn't self-document the
+supported time ranges available for request, which are:
+
+  * `http://server/json?today`    - Return only events occuring today (that's "within the current 24-hr period")
+  * `http://server/json?tomorrow` - Return only events occuring tomorrow (that's "from midnight tonight for a 24-hr period")
+  * `http://server/json?week`     - Return only events occuring within the next 7 days
+  * `http://server/json?fullrange` - Return all events found in the data spec (which is, itself, clamped to a restricted time period, see config file below)
+
+Any other time specification, including __no__ query parameter, is interpreted as a default which is all events occurring TODAY or TOMORROW. 
 
 ## Source Data 
 
@@ -50,6 +53,7 @@ However, a suitable minimal demo is possible using the file
     "MaxEventLookAheadDays"         :   90,
     "DataDirectory"                 :   "/path/to/localcopyof/icscalserv",
     "calendarJSONFile"              :   "calendars.json",
+    "compactOutput"                 :   false,
     "calendars": [
         {   "Name"  : "UK Public Holidays",
             "URL"   : "https://calendar.google.com/calendar/ical/en.uk%23holiday%40group.v.calendar.google.com/public/basic.ics"
