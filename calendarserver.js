@@ -36,17 +36,6 @@ if(("undefined" === typeof cfgdata.calendarJSONFile) ||
    process.exit(1);
 }
 
-// Post-process the variables for convenience, especially with that pesky milliseconds requirement
-
-//Maximum look-back for Event Data
-//(convert to JS Millis)
-var maxLookBack = cfgdata.MaxEventLookBackDays * 86400 * 1000; 
-//Used to define how far in the future we'll show events
-var maxLookAhead = cfgdata.MaxEventLookAheadDays * 86400 * 1000;
-
-//DEFAULT time-window to serve events if no parameters supplied
-var defaultServeLookBack = 0 //"Now"
-var defaultServeLookAhead = 2 * 86400 * 1000 // 2 days
 /*
 END OF GLOBAL VARIABLES
 -----------------------
@@ -56,6 +45,7 @@ END OF GLOBAL VARIABLES
 
 //comprehender for calendar files:
 //(use the broader node version)
+// https://github.com/jens-maus/node-ical/
 var ical = require('node-ical');
 //Library to work with recurring events (aka "godsend");
 var RRule = require('rrule').RRule;
@@ -63,6 +53,8 @@ var RRule = require('rrule').RRule;
 var fs = require('fs');
 //Http support - we don't need our output encrypted 
 var http = require('http');
+//  HTTPS support (Google Calendar reading requires this)
+var https = require('https');
 //to understand passed urls:
 var url = require('url');
 //to understand filesystem paths:
@@ -74,18 +66,13 @@ var dayjs = require('dayjs')
 //Process support.
 const { emitWarning } = require('process');
 
-//Used to define how often this script should check for a new data file
-//(to limit re-reads). Default = 10 minutes
-var fileCheckAge = 10*60*1000;
-var fileAgeThreshold = new Date(Date.now() - fileCheckAge);
-//These variables get updated on each request but need an initial value:
-var oldestEventAge = new Date(Date.now() - maxLookBack);
-var newestEventAge = new Date(Date.now() + maxLookAhead);
+
+
 
 // URI for Dataretrieve:
-var dataRequestURI = "/JSON";
+var dataRequestURI = "/json";
 // Metadata response (to check health)
-var metaDataRequestURI = "/Health";
+var metaDataRequestURI = "/health";
 
 //Used to determine the filetype sent back:
 var mimeTypes = {
@@ -104,14 +91,25 @@ var calevents = [];
 // CalEvents metadata for tracking and serving:
 var calData = {
     checkTime: 0,
-    checkAgeThreshold: 0,
+    lastSuccessfulRetrieveTime: 0,
+    minDataAgeBeforeRefresh: cfgdata.MinDataAgeBeforeRefreshHrs * 3600 * 1000,
+    maxLookBack: cfgdata.MaxEventLookBackDays * 86400 * 1000,
+    maxLookAhead: cfgdata.MaxEventLookAheadDays * 86400 * 1000,
+    defaultServeLookBack: 0, // now
+    defaultServeLookAhead: 2 * 86400 * 1000, // 2 days
     lastReq: 0,
-    fileLastModified: 0,
-    fileLastLoaded: 0,
+    dataLastRetrieved: 0,
+    dataLastLoaded: 0,
     numEvents : 0,
     numCals : 0,
     calNames : []      //needed for parsing output into blocks
 }
+
+//These need initial values
+calData.oldestEventAge = new Date(Date.now() - calData.maxLookBack);
+calData.newestEventAge = new Date(Date.now() + calData.maxLookAhead);
+calData.dLB = new Date(Date.now() - calData.defaultServeLookBack);
+calData.dLF = new Date(Date.now() + calData.defaultServeLookAhead);
 
 //Set a default if not found in the config file for whether the output should be compressed 
 //or not
@@ -137,20 +135,20 @@ Master Program Logic goes:
 //Force caldata re-read on start:
 //(KEEP - otherwise 1st call will come back blank due to async refresh)
 refreshCalData();
-//Setup async refresh every fileCheckAge millis:
-setInterval(refreshCalData,fileCheckAge);
+//Setup async refresh every MinDataAgeBeforeRefresh millis:
+setInterval(refreshCalData,calData.minDataAgeBeforeRefresh);
 
 //MAIN LOOP:
 var calServ = http.createServer(function(req,res){
     //Get the request URL and act accordingly:
-    var locReq = url.parse(req.url).pathname;
+    var locReq = url.parse(req.url).pathname.toLowerCase();
     var timeSpec = url.parse(req.url).search;
     calData.lastReq = dayjs().format();
     console.log(`${calData.lastReq} - INFO - request for ${req.url}`); 
     if(locReq == dataRequestURI) {
         //res.setHeader('Content-Type', 'application/json');
         //res.end(JSON.stringify(calevents));
-        serveCalData(req,res,timeSpec)
+        serveCalData(req,res,timeSpec.toLowerCase())
     } else if(locReq == metaDataRequestURI) {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(calData,null,3));
@@ -174,16 +172,15 @@ function serveCalData(req,res,timeSpec) {
     //This is a request for the parsed calendar data stream
     res.setHeader('Content-Type', 'application/json');
     //reset event search window markers since it might have been a while since last request
-    oldestEventAge = new Date(Date.now() - maxLookBack);
-    newestEventAge = new Date(Date.now() + maxLookAhead);
-
-    dLB = new Date(Date.now() - defaultServeLookBack);
-    dLF = new Date(Date.now() + defaultServeLookAhead);
-
+    calData.oldestEventAge = new Date(Date.now() - calData.maxLookBack);
+    calData.newestEventAge = new Date(Date.now() + calData.maxLookAhead);
+    calData.dLB = new Date(Date.now() - calData.defaultServeLookBack);
+    calData.dLF = new Date(Date.now() + calData.defaultServeLookAhead);
+    
     //reset to day boundaries (used as default):
     var timeCriteria = "DEFAULT";
-    var earliest = new Date(dLB.getFullYear(),dLB.getMonth(),dLB.getDate(),00,00,00,00);
-    var latest   = new Date(dLF.getFullYear(),dLF.getMonth(),dLF.getDate(),23,59,59,59);
+    var earliest = new Date(calData.dLB.getFullYear(),calData.dLB.getMonth(),calData.dLB.getDate(),00,00,00,00);
+    var latest   = new Date(calData.dLF.getFullYear(),calData.dLF.getMonth(),calData.dLF.getDate(),23,59,59,59);
     n = new Date(Date.now());
     
     //Sub-categorise the output date range, if supplied. If not supplied, use default range
@@ -195,14 +192,14 @@ function serveCalData(req,res,timeSpec) {
         timeCriteria = "TOMORROW";
         earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
         latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,23,59,59,999);
-    } else if(timeSpec == "?week") {
+    } else if(timeSpec == "?week" || timeSpec == "?7days") {
         timeCriteria = "WEEK";
         earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
         latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+7,23,59,59,999);
-    } else if(timeSpec == "?fullrange") {
+    } else if(timeSpec == "?fullrange" || timeSpec == "?allevents") {
         timeCriteria = "ALLEVENTS";
-        earliest     = oldestEventAge;
-        latest       = newestEventAge;
+        earliest     = calData.oldestEventAge;
+        latest       = calData.newestEventAge;
     }
     let matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
     let ts = dayjs().format();
@@ -247,45 +244,14 @@ function reformatEventsForSerialisation(ev) {
 // (NOTE: Now relies on external file / url retrieval)
 function refreshCalData() {
     calData.checkTime = new Date(Date.now())
+    calData.checkAgeThreshold = new Date(calData.checkTime - calData.minDataAgeBeforeRefresh);
     ts = dayjs().format()
-    console.log(`${ts} - INFO - Checking state of cached data...`);
-    calData.checkAgeThreshold = new Date(Date.now()-fileCheckAge);
-    fs.stat(cfgdata.calendarJSONFile, function(err, stats) {
-        if(err) {
-            console.log(`${ts} - FATAL - unable to stat calendar data file: ${cfgdata.calendarJSONFile}`);
-            //This, is a problem. We need that data available.
-            process.exit(1);
-        }  
-        calData.fileLastModified = new Date(util.inspect(stats.mtime));
-        if(calData.fileLastModified > calData.fileLastLoaded) {
-            //File has been modified since we last read it, so re-read it
-            console.log(`${ts} - INFO  - Calendar Data File modified since we last read it, re-reading`);
-            //NB - Require() Considered Harmful for non-static data...
-            fs.readFile(cfgdata.calendarJSONFile,(error,data) => {
-                if(error) {
-                    console.log(`${ts} - FATAL - Error reading file ${cfgdata.calendarJSONFile} : ${error}`);
-                    //This shouldn't happen and we can't continue so
-                    process.exit(1)
-                }
-                //We could read it, but can we parse it?
-                try {
-                    calevents = turnStringTimesIntoDateObjects(JSON.parse(data))
-                } catch (e) {
-                    console.log(`${ts} - FATAL - Error parsing ${cfgdata.calendarJSONFile} : ${e}`);
-                    //Again, this is non-recoverable so:
-                    process.exit(1)
-                }
-                //Update our metadata
-                calData.calNames = getCalNames(calevents)
-                calData.numCals = calData.calNames.length;
-                calData.numEvents = calevents.length;
-                calData.fileLastLoaded = new Date(Date.now());
-                console.log(`${ts} - INFO - Calendar re-loaded. ${calData.numEvents} events available`);
-            });
-        } else {
-            console.log(`${ts} - INFO - Calendar Data file hasn't changed; Events not refreshed`);
-        }
-    });
+    if(calData.lastSuccessfulRetrieveTime > calData.checkAgeThreshold) {
+        console.log(`${ts} - INFO - Cached Event Data newer than refresh threshold`);
+    } else {
+        console.log(`${ts} - INFO - Cached Event Data older than refresh threshold; attempting refresh`);
+        refreshCalendarDataFromServers().catch(console.log);
+    }
 }
 
 // helper function during refresh.
@@ -328,4 +294,191 @@ function eventsWithinDateRange(listOfEvents,earliest,latest) {
     return matchingEvents.sort(function(a,b){return a.start - b.start});
 }
 
+//
+// ------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------
+// This is the code used to retrieve and parse calendars; it's available as a 
+// separate executable "getandparseice.js" but more useful for embedded servers
+// as a suite of functions here.
+//
 
+
+
+//This is the master function, which has to be Async because everything else under it is async.
+async function refreshCalendarDataFromServers() {
+    calData.numCals = 0;
+    calevents = [];
+    await processCalendars(cfgdata.calendars)
+}
+/* --  NORMAL SCRIPT EXIT POINT -- */
+
+//-
+// ---------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
+//
+async function processCalendars(cals) {
+    calProcessing = cals.map(function(cal){
+        return ical.async.fromURL(cal.URL).catch(err => {console.log(`RETRIEVE ERROR FOR ${cal.Name} : ${err.message}`)})
+    })
+    
+    calNames = cals.map(cal => cal.Name)
+    Promise.all(calProcessing).then((calEvents) => {
+        for(let i = 0; i < calEvents.length; i++) {
+            if(calEvents[i] === undefined || calEvents[i]  == null) {
+                console.log(`WARNING - No calendar data returned for ${calNames[i]}`)
+            } else {
+                var k = Object.keys(calEvents[i])
+                if(k.length >= 0 && k[0].toLowerCase().includes("html")) {
+                    console.log(`WARNING - Response contained no calendar data for ${calNames[i]}`)
+                } else {
+                    //HAPPY PATH
+                    calData.numCals += 1;
+                    console.log(`${calNames[i]} returned ${k.length} elements`)
+                    const mEvents = extractEventsFromCal(calEvents[i],calNames[i])
+                    for(var ev in mEvents) {
+                        if(mEvents.hasOwnProperty(ev)) {
+                            calevents.push(mEvents[ev])
+                        }
+                    }
+                }
+            }
+        }
+    }).finally(() => {
+        processCompletedEventData();
+    });
+}
+
+//
+// ------------------------------------------------------------------------------------------
+// I'm beginning to hate having to work-around Node's asynchronicity
+function processCompletedEventData() {
+    var ts = dayjs().format()
+    //SANITY CHECK - do NOT do file IO if we've got no new event data to process...
+    if(calevents.length === 0 && calData.numCals === 0) {
+        console.log(`${ts} - ERROR - No Calendar Events Retrieved.`);
+    } else {
+        calData.lastSuccessfulRetrieveTime = new Date(Date.now());
+        calData.calNames = getCalNames(calevents);
+        calData.numEvents = calevents.length;
+        console.log(`${ts} - INFO - Calendar re-loaded. ${calData.numEvents} events available`);
+    }
+}
+
+//
+// ------------------------------------------------------------------------------------------
+//
+function extractEventsFromCal(data,calName) {
+    //Basic comprehension check:
+    var matchingEvents = [];
+    var numEntries = 0;
+    var numMatches = 0;
+    for (var k in data) {
+        if (data.hasOwnProperty(k)) {
+            var ev = data[k]
+            numEntries += 1;
+            if(ev.type === 'VEVENT'
+               && ev.hasOwnProperty('start')) {
+               numMatches += 1;
+               var evDets = {    cal   : calName,
+                                 //id    : ev.uid,
+                                 title : ev.summary,
+                              location : ev.location,
+                              start : ev.start };
+                //Determine duration (in minutes) - AFTER CHECKING THERE IS AN END TIME!
+                if(ev.hasOwnProperty('start') && ev.hasOwnProperty('end')) {
+                    var duration = ev.end.getTime() - ev.start.getTime();
+                    //evDets.duration = duration / 1000;
+                    evDets.end = ev.end;
+                } else {
+                    //evDets.duration = 0;
+                    evDets.end = ev.start
+                }
+               
+                //MCE 2017-12-28 - Handle EXDATE exclusions if they exist. Object ev.exdate may be a
+                //                 singleton (single-instance with a "params" and "val") or an array of
+                //                 params/val objects. Or may not exist at all.
+                // MAJOR IRRITATION: EXDATE values don't conform to ISO8601 so we can't rely on Date.parse to
+                //                   process them. See "convertExdateToMsec() below"
+                var evExclusions = [];
+                if(ev.hasOwnProperty('exdate')) {
+                    //match a singleton:
+                    if(ev.exdate.hasOwnProperty('val')) {
+                        evExclusions.push(convertExdateToMsec(ev.exdate));
+                    } else {
+                        Object.keys(ev.exdate).forEach(key => {
+                            //Match if we've extracted one-of-many:
+                            if(ev.exdate[key].hasOwnProperty('val')) {
+                                evExclusions.push(convertExdateToMsec(ev.exdate[key]));
+                            }
+                        });
+                    }
+                }
+                //Check for Recurrence Rules. If there is one, add ALL entries within
+                //the configured time window INSTEAD of the source event
+                if(ev.hasOwnProperty('rrule')) {
+                    var validRecurrences = ev.rrule.between(calData.oldestEventAge, calData.newestEventAge);
+                    for(var occPtr in validRecurrences) {
+                        var repStart = Date.parse(validRecurrences[occPtr]); //turn string into mSec
+                        //MCE 2017-12-28: Check for value matching an EXCLUSION extracted above
+                        if(evExclusions.indexOf(repStart) != -1) {
+                            console.log("Skipping recurrence " + validRecurrences[occPtr] + " - Matches EXDATE Exclusion");
+                            continue;
+                        }
+                        //Simple assignment does a reference, not a copy. This does a shallow copy which is sufficient:
+                        var repEvDets = Object.assign({},evDets);
+                        repEvDets.sequencenumber = occPtr;
+                        repEvDets.orgStart = ev.start;
+                        repEvDets.start = new Date(repStart); //turn mSec into Date() object
+                        if(evDets.hasOwnProperty('duration')) {
+                            repEvDets.end   = new Date(repStart + (evDets.duration * 1000)); //Cal end as start+duration msec
+                        } else {
+                            repEvDets.end = repEvDets.start;
+                        }
+                        repEvDets.recrule = ev.rrule.toText();
+                        matchingEvents.push(repEvDets);
+                    }
+                } else {
+                    //No repeat rule defined, it's a one-off. So we need to check whether it's within our window
+                    //before saving it for later:
+                    if(ev.start.getTime() >= calData.oldestEventAge && ev.end.getTime() <= calData.newestEventAge) {
+                        matchingEvents.push(evDets);
+                    }
+                }
+            }
+        }
+    }
+    return matchingEvents
+}
+//
+// ------------------------------------------------------------------------------------------
+//
+function convertExdateToMsec(exdate) {
+    var tz = 'Europe/London';
+    if(exdate.hasOwnProperty('params') && exdate.params.hasOwnProperty('TZID')) {
+        tz = exdate.params.TZID;
+    }
+    var ts = exdate.val;
+    //ts matches spec:
+    //0123456789ABCDE
+    //YYYYMMDDTHHMMSS
+    //20171226T183000
+    //String-slice to extract date, time
+    var yr = ts.substring(0,4);
+    var mo = ts.substring(4,6); mo = mo -1; //Constructor below treats Jan as 00 not 01
+    var dy = ts.substring(6,8);
+    var hr = ts.substring(9,11);
+    var mn = ts.substring(11,13);
+    var sc = ts.substring(13,15);
+
+    var retTS;
+    if(tz === 'Europe/London') {
+        retTS = new Date(yr,mo,dy,hr,mn,sc);
+    } else {
+        console.log('UNKNOWN TIMEZONE "' + tz + '" - TREATING AS UTC');
+        retTS = new Date(Date.UTC(yr,mo,dy,hr,mn,sc));
+    }
+
+    return(retTS.getTime());
+}
