@@ -8,6 +8,9 @@
     "author"    :   "Matthew Exley <henley-github@guided-naafi.org> (https://www.guided-naafi.org/)",
     "license"   :   "Apache-2.0",
     "repository":   { "type": "git",  "url": "https://github.com/henley-regatta/icscalserv.git"},
+    "scripts"   : {
+        "start": "node calendarserver.js"
+    },
     "dependencies": {
         "rrule"     : "2.7.1",
         "node-ical" : "0.15.1",
