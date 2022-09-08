@@ -67,3 +67,21 @@ However, a suitable minimal demo is possible using the file
     ]
 }
 ```
+## Docker/Container Build
+
+An example `Dockerfile` (and `.dockerignore`) is included to allow
+containerisation of a build; no warranty is provided for either of these
+and in particular some of the config values are "baked in" to the
+container build process which is a bit unfortunate at the minute and could
+do with improvement. A short guide to doing this yourself would be:
+
+  * Install Docker
+  * `git clone https://github.com/henley-regatta/icscalserv.git`
+  * Create a `configdata.json` file in the source directory `./icscalserv` (*i.e.* create `./icscalserv/configdata.json`)
+    * Make sure to update the calendar URLs you want to use
+    * `DataDirectory` is not used by the server and can be omitted; although the value for `calendarJSONFile` isn't used, a value **must** be defined for it
+    * Make a note of the value you set for `ServerListenPort` - if changed from the default update the `Dockerfile` EXPOSE value and change (at least) the source port on the RUN command
+  * Build the container from the `icscalserv` directory using: `docker build -t myUserName/icscalserv-app`
+  * Assuming it built (it should!), run the container using: `docker run -p 24611:24611 -d myUserName/icscalserv-app`
+    * Remember to adjust the `-p 24611:24611` values if you changed `ServerListenPort`
+  * The server should then be available both locally ("localhost") and via the hostname at `http://hostname:24611/json`
