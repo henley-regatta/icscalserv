@@ -142,13 +142,12 @@ setInterval(refreshCalData,calData.minDataAgeBeforeRefresh);
 var calServ = http.createServer(function(req,res){
     //Get the request URL and act accordingly:
     var locReq = url.parse(req.url).pathname.toLowerCase();
-    var timeSpec = url.parse(req.url).search;
+    //timeSpec may not be set. But if it is, convert to lowercase      
+    var timeSpec = url.parse(req.url).search ? url.parse(req.url).search.toLowerCase() : 'default';
     calData.lastReq = dayjs().format();
     console.log(`${calData.lastReq} - INFO - request for ${req.url}`); 
     if(locReq == dataRequestURI) {
-        //res.setHeader('Content-Type', 'application/json');
-        //res.end(JSON.stringify(calevents));
-        serveCalData(req,res,timeSpec.toLowerCase())
+        serveCalData(req,res,timeSpec)
     } else if(locReq == metaDataRequestURI) {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(calData,null,3));
