@@ -1,0 +1,6 @@
+#Just like .gitignore but for container builds 
+node_modules 
+npm-debug.log 
+.git 
+calendars.json 
+calendars.json.previous 
