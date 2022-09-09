@@ -13,14 +13,14 @@
 //
 // Can run on any recent Node system but you'll want some additional
 // modules installed to allow for parsing and hosting, see package.json 
-// for details
+// for details and use "npm install" to get them.
 //
 // After this, run the server using "node calendarserver.js"
 /*************************************************************************************/
 //
 // BUGLIST
 // -------
-// 2022-08-30 - Incomplete conversion from servecal.js.
+// 2022-09-09 - None known. Yes I know that's asking for trouble.
 /*************************************************************************************/
 
 // Import the environment definition file (JSON)
@@ -29,8 +29,7 @@
 var cfgdata = require('./configdata');
 
 //Quick check and bang-out if we don't have the data we need
-if(("undefined" === typeof cfgdata.calendarJSONFile) ||
-   ("undefined" === typeof cfgdata.calendars) ||
+if(("undefined" === typeof cfgdata.calendars) ||
    ("undefined" === typeof cfgdata.ServerListenPort)) {
    console.err("Configuration data not loaded - corrupt or incomplete configdata.json file");
    process.exit(1);
@@ -90,7 +89,7 @@ var mimeTypes = {
 var calevents = [];
 // CalEvents metadata for tracking and serving:
 var calData = {
-    checkTime: 0,
+    lastCalRefreshCheckTime: 0,
     lastSuccessfulRetrieveTime: 0,
     minDataAgeBeforeRefresh: cfgdata.MinDataAgeBeforeRefreshHrs * 3600 * 1000,
     maxLookBack: cfgdata.MaxEventLookBackDays * 86400 * 1000,
@@ -98,8 +97,7 @@ var calData = {
     defaultServeLookBack: 0, // now
     defaultServeLookAhead: 2 * 86400 * 1000, // 2 days
     lastReq: 0,
-    dataLastRetrieved: 0,
-    dataLastLoaded: 0,
+    numReqs: 0,
     numEvents : 0,
     numCals : 0,
     calNames : []      //needed for parsing output into blocks
@@ -136,16 +134,23 @@ Master Program Logic goes:
 //(KEEP - otherwise 1st call will come back blank due to async refresh)
 refreshCalData();
 //Setup async refresh every MinDataAgeBeforeRefresh millis:
-setInterval(refreshCalData,calData.minDataAgeBeforeRefresh);
+//nb: however, add an offset of 60 seconds to this because there
+//    will be a delay between ASKING to refresh and RETRIEVING new data
+calData.refreshCalDataInterval = calData.minDataAgeBeforeRefresh + 60 * 1000;
+setInterval(refreshCalData,calData.refreshCalDataInterval);
 
 //MAIN LOOP:
 var calServ = http.createServer(function(req,res){
     //Get the request URL and act accordingly:
     var locReq = url.parse(req.url).pathname.toLowerCase();
+    
     //timeSpec may not be set. But if it is, convert to lowercase      
     var timeSpec = url.parse(req.url).search ? url.parse(req.url).search.toLowerCase() : 'default';
+    //Bookkeeping
+    calData.lastReqHost = req.headers.host ? req.headers.host : 'UNKNOWN'
     calData.lastReq = dayjs().format();
-    console.log(`${calData.lastReq} - INFO - request for ${req.url}`); 
+    calData.numReqs += 1;
+    console.log(`${calData.lastReq} - INFO - request ${calData.numReqs} for ${req.url} from ${calData.lastReqHost}`); 
     if(locReq == dataRequestURI) {
         serveCalData(req,res,timeSpec)
     } else if(locReq == metaDataRequestURI) {
@@ -242,13 +247,13 @@ function reformatEventsForSerialisation(ev) {
 //necessary
 // (NOTE: Now relies on external file / url retrieval)
 function refreshCalData() {
-    calData.checkTime = new Date(Date.now())
-    calData.checkAgeThreshold = new Date(calData.checkTime - calData.minDataAgeBeforeRefresh);
+    calData.lastCalRefreshCheckTime = new Date(Date.now())
+    calData.newCalDataCheckAgeThreshold = new Date(calData.lastCalRefreshCheckTime - calData.minDataAgeBeforeRefresh);
     ts = dayjs().format()
-    if(calData.lastSuccessfulRetrieveTime > calData.checkAgeThreshold) {
-        console.log(`${ts} - INFO - Cached Event Data newer than refresh threshold`);
+    if(calData.lastSuccessfulRetrieveTime > calData.newCalDataCheckAgeThreshold) {
+        console.log(`${ts} - INFO - No Event Refresh; retrieved at ${calData.lastSuccessfulRetrieveTime}, refresh threshold: ${calData.newCalDataCheckAgeThreshold}`);
     } else {
-        console.log(`${ts} - INFO - Cached Event Data older than refresh threshold; attempting refresh`);
+        console.log(`${ts} - INFO - Refreshing events. Last retrieve at ${calData.lastSuccessfulRetrieveTime}, refresh threshold: ${calData.newCalDataCheckAgeThreshold}`);
         refreshCalendarDataFromServers().catch(console.log);
     }
 }
@@ -306,8 +311,9 @@ function eventsWithinDateRange(listOfEvents,earliest,latest) {
 
 //This is the master function, which has to be Async because everything else under it is async.
 async function refreshCalendarDataFromServers() {
-    calData.numCals = 0;
-    calevents = [];
+    //don't zap this data until we KNOW we've got incoming events
+    //calData.numCals = 0;
+    //calevents = []; 
     await processCalendars(cfgdata.calendars)
 }
 /* --  NORMAL SCRIPT EXIT POINT -- */
@@ -318,6 +324,9 @@ async function refreshCalendarDataFromServers() {
 // ---------------------------------------------------------------------------------------------------------
 //
 async function processCalendars(cals) {
+    //internal trackers - only update the globs on success 
+    var calsRetrieved = 0
+    var eventsRetrieved = []
     calProcessing = cals.map(function(cal){
         return ical.async.fromURL(cal.URL).catch(err => {console.log(`RETRIEVE ERROR FOR ${cal.Name} : ${err.message}`)})
     })
@@ -333,31 +342,35 @@ async function processCalendars(cals) {
                     console.log(`WARNING - Response contained no calendar data for ${calNames[i]}`)
                 } else {
                     //HAPPY PATH
-                    calData.numCals += 1;
+                    calsRetrieved += 1;
                     console.log(`${calNames[i]} returned ${k.length} elements`)
                     const mEvents = extractEventsFromCal(calEvents[i],calNames[i])
                     for(var ev in mEvents) {
                         if(mEvents.hasOwnProperty(ev)) {
-                            calevents.push(mEvents[ev])
+                            eventsRetrieved.push(mEvents[ev])
                         }
                     }
                 }
             }
         }
     }).finally(() => {
-        processCompletedEventData();
+        processCompletedEventData(calsRetrieved,eventsRetrieved);
     });
 }
 
 //
 // ------------------------------------------------------------------------------------------
 // I'm beginning to hate having to work-around Node's asynchronicity
-function processCompletedEventData() {
+function processCompletedEventData(numProcCals,procCalEvents) {
     var ts = dayjs().format()
     //SANITY CHECK - do NOT do file IO if we've got no new event data to process...
-    if(calevents.length === 0 && calData.numCals === 0) {
+    if(procCalEvents.length === 0 && numProcCals === 0) {
         console.log(`${ts} - ERROR - No Calendar Events Retrieved.`);
     } else {
+        //Shallow Copy is good enough
+        calevents = [];
+        Object.assign(calevents,procCalEvents);
+        calData.numCals = numProcCals;
         calData.lastSuccessfulRetrieveTime = new Date(Date.now());
         calData.calNames = getCalNames(calevents);
         calData.numEvents = calevents.length;
