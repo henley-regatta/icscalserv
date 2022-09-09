@@ -82,6 +82,6 @@ do with improvement. A short guide to doing this yourself would be:
     * `DataDirectory` is not used by the server and can be omitted; although the value for `calendarJSONFile` isn't used, a value **must** be defined for it
     * Make a note of the value you set for `ServerListenPort` - if changed from the default update the `Dockerfile` EXPOSE value and change (at least) the source port on the RUN command
   * Build the container from the `icscalserv` directory using: `docker build -t myUserName/icscalserv-app`
-  * Assuming it built (it should!), run the container using: `docker run -p 24611:24611 -d myUserName/icscalserv-app`
+  * Assuming it built (it should!), run the container using: `docker run -p 24611:24611 -d --name icscalserv myUserName/icscalserv-app`
     * Remember to adjust the `-p 24611:24611` values if you changed `ServerListenPort`
   * The server should then be available both locally ("localhost") and via the hostname at `http://hostname:24611/json`

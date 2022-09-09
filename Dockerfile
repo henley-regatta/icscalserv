@@ -4,7 +4,7 @@
 #       docker build . -t username/icscalserv-app 
 #  (but don't forget to copy/create "configdata.json" first!)
 # EXECUTE with:
-#       docker run -p 24611:24611 -d username/icscalserv-app
+#       docker run -p 24611:24611 -d --name icscalserv username/icscalserv-app
 
 FROM node:16
 # CODE directory in the container
