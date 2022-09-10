@@ -199,7 +199,7 @@ function serveCalData(req,res,timeSpec) {
         latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,23,59,59,999);
     } else if(timeSpec == "?week" || timeSpec == "?7days") {
         timeCriteria = "WEEK";
-        earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59,999);
+        earliest     = new Date(n.getFullYear(),n.getMonth(),n.getDate(),00,00,00,000);
         latest       = new Date(n.getFullYear(),n.getMonth(),n.getDate()+7,23,59,59,999);
     } else if(timeSpec == "?fullrange" || timeSpec == "?allevents") {
         timeCriteria = "ALLEVENTS";
@@ -208,7 +208,7 @@ function serveCalData(req,res,timeSpec) {
     }
     let matchingEvents = eventsWithinDateRange(calevents,earliest,latest)
     let ts = dayjs().format();
-    console.log(`${ts} - INFO - returning ${matchingEvents.length} events matching ${timeCriteria}, between ${earliest} and ${latest}`);
+    console.log(`${ts} - INFO - Range ${timeCriteria} matches ${matchingEvents.length} events from ${dayjs(earliest).format('DD/MM/YY HH:mm')} to ${dayjs(latest).format('DD/MM/YY HH:mm')}`);
     //make the output human or machine readable?
     let squeeze = cfgdata.compactOutput ? 0 : 2
     res.end(JSON.stringify(reformatEventsForSerialisation(matchingEvents),null,squeeze));
@@ -307,7 +307,6 @@ function eventsWithinDateRange(listOfEvents,earliest,latest) {
     for (var i in listOfEvents) {
         var evstart = listOfEvents[i].start 
         if (evstart>=earliest && evstart<=latest) {
-           //console.log(`${evstart} is between ${earliest} and ${latest}`)
             matchingEvents.push(listOfEvents[i]);
         }
     }
@@ -350,17 +349,18 @@ async function processCalendars(cals) {
     
     calNames = cals.map(cal => cal.Name)
     Promise.all(calProcessing).then((calEvents) => {
+        var ts = dayjs().format();
         for(let i = 0; i < calEvents.length; i++) {
             if(calEvents[i] === undefined || calEvents[i]  == null) {
-                console.log(`WARNING - No calendar data returned for ${calNames[i]}`)
+                console.log(`${ts} - WARNING - No calendar data returned for ${calNames[i]}`)
             } else {
                 var k = Object.keys(calEvents[i])
                 if(k.length >= 0 && k[0].toLowerCase().includes("html")) {
-                    console.log(`WARNING - Response contained no calendar data for ${calNames[i]}`)
+                    console.log(`${ts} - WARNING - Response contained no calendar data for ${calNames[i]}`)
                 } else {
                     //HAPPY PATH
                     calsRetrieved += 1;
-                    console.log(`${calNames[i]} returned ${k.length} elements`)
+                    console.log(`${ts} - INFO - Calendar "${calNames[i]}" returned ${k.length} elements`)
                     const mEvents = extractEventsFromCal(calEvents[i],calNames[i])
                     for(var ev in mEvents) {
                         if(mEvents.hasOwnProperty(ev)) {
@@ -391,7 +391,7 @@ function processCompletedEventData(numProcCals,procCalEvents) {
         calData.lastSuccessfulRetrieveTime = new Date(Date.now());
         calData.calNames = getCalNames(calevents);
         calData.numEvents = calevents.length;
-        console.log(`${ts} - INFO - Calendar re-loaded. ${calData.numEvents} events available`);
+        console.log(`${ts} - INFO - All Configured Calendars re-loaded. ${calData.numEvents} events available`);
     }
 }
 
