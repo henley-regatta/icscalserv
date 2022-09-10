@@ -11,16 +11,16 @@
 // events in the near future which might suit a display program 
 // looking for lightweight near-term calendar data.
 //
+// Because the output is intended for small devices without an RTC,
+// things like Dates and included timestamps should be pre-formatted
+// for easy consumption. Spitting out "2022-09-10T06:39:51+00:00"
+// and/or embedding a timezone isn't great for back-end handling.
+//
 // Can run on any recent Node system but you'll want some additional
 // modules installed to allow for parsing and hosting, see package.json 
 // for details and use "npm install" to get them.
 //
 // After this, run the server using "node calendarserver.js"
-/*************************************************************************************/
-//
-// BUGLIST
-// -------
-// 2022-09-09 - None known. Yes I know that's asking for trouble.
 /*************************************************************************************/
 
 // Import the environment definition file (JSON)
@@ -40,7 +40,6 @@ END OF GLOBAL VARIABLES
 -----------------------
 (No User Modifiable Parts Below This Line)
 **************************************************************************************/
-
 
 //comprehender for calendar files:
 //(use the broader node version)
@@ -62,10 +61,12 @@ var path = require('path');
 var util = require('util');
 //Date formatting support
 var dayjs = require('dayjs')
+var utc = require('dayjs/plugin/utc');
+var timezone = require('dayjs/plugin/timezone'); // dependent on utc plugin
+dayjs.extend(utc);
+dayjs.extend(timezone);
 //Process support.
 const { emitWarning } = require('process');
-
-
 
 
 // URI for Dataretrieve:
@@ -219,7 +220,17 @@ function serveCalData(req,res,timeSpec) {
 // (and we'd like a header section, and we can reduce the size of the output with trimming)
 function reformatEventsForSerialisation(ev) {
     var outStruct = {
-        "time" : new Date(Date.now()),
+        // TODO: Output date re-formatting.
+        "tz"       : dayjs().format('ZZ'),
+        "timezone" : dayjs.tz.guess(),
+        "date"     : dayjs().format('DD/MM/YYYY'),  //TODO - allow internationalisation/configuration?
+        "day"      : dayjs().format('dddd'),
+        "month"    : dayjs().format('MMMM'),
+        "year"     : dayjs().format('YYYY'),
+        "dom"      : dayjs().format('D'),
+        "moy"      : dayjs().format('M'),
+        "time"     : dayjs().format('HH:mm'),       //TODO - allow internationalisation/configuration?
+        "cachetime": dayjs(calData.lastSuccessfulRetrieveTime).format('ddd HH:mm'),
         //TODO - would be nice to get weather and put it in here, wouldn't it?
         "tempDegrees" : 22,
         "weatherForecast" : "showers",
@@ -230,11 +241,17 @@ function reformatEventsForSerialisation(ev) {
     ]
     for(i in ev) {
         let e = ev[i];
-        //Shorten the data, push to cals struct
+        let duration = (e.start != e.end)? dayjs(e.end).diff(dayjs(e.start)).valueOf() : 0;
+        let durationSeconds = duration / 1000;
+        //A handy function but it's TZ aware so we need to strip that:
+        duration = dayjs(duration - (dayjs().utcOffset() * 60 * 1000)).format('HH:mm');
+        //Shorten the data, reformat dates push to cals struct
         outStruct.cals[e.cal].push({
             "title" : e.title, 
-            "start" : e.start, 
-            "end"   : e.end,
+            "start" : dayjs(e.start).format('ddd HH:mm'), 
+            "end"   : dayjs(e.end).format('ddd HH:mm'),
+            "duration" : duration,
+            "durSecs"  : durationSeconds,
             "location" : e.location
          });
     }
