@@ -230,6 +230,7 @@ function reformatEventsForSerialisation(ev) {
         "dom"      : dayjs().format('D'),
         "moy"      : dayjs().format('M'),
         "time"     : dayjs().format('HH:mm'),       //TODO - allow internationalisation/configuration?
+        "ts"       : dayjs().unix(),
         "cachetime": dayjs(calData.lastSuccessfulRetrieveTime).format('ddd HH:mm'),
         //TODO - would be nice to get weather and put it in here, wouldn't it?
         "tempDegrees" : 22,
@@ -248,8 +249,10 @@ function reformatEventsForSerialisation(ev) {
         //Shorten the data, reformat dates push to cals struct
         outStruct.cals[e.cal].push({
             "title" : e.title, 
-            "start" : dayjs(e.start).format('ddd HH:mm'), 
-            "end"   : dayjs(e.end).format('ddd HH:mm'),
+            "startts" : dayjs(e.start).unix(),
+            "date"  : dayjs(e.start).format('D'),
+            "start" : dayjs(e.start).format('HH:mm'), 
+            "end"   : dayjs(e.end).format('HH:mm'),
             "duration" : duration,
             "durSecs"  : durationSeconds,
             "location" : e.location
