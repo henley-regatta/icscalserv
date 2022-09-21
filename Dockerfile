@@ -5,10 +5,13 @@
 #  (but don't forget to copy/create "configdata.json" first!)
 # EXECUTE with:
 #       docker run -p 24611:24611 -d --name icscalserv username/icscalserv-app
-
-FROM node:16
+#
+# 2022-09-21 - Mod image base and env vars to set TIMEZONE accordingly
+FROM node:16-buster
 # CODE directory in the container
 WORKDIR /opt/src/icscalserv
+# Setup timezone
+ENV TZ="Europe/London"
 # Install the app dependencies
 COPY package*.json ./  
 RUN npm install
