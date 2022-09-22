@@ -3,6 +3,8 @@
 Ported from, and simplified version of, the calendar retrieval and parsing code I wrote for
 the community centre heating project.
 
+For an example of a consumer of the data this produces, see also [henley-regatta/pico_calendar_display](https://github.com/henley-regatta/pico_calendar_display)
+
 Stripped of all the additional requirements that project had, this one has 2 goals:
 
   * Periodically retrieve a set of calendar ICS files from URL locations
