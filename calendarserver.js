@@ -313,7 +313,6 @@ function eventsWithinDateRange(listOfEvents,earliest,latest) {
             matchingEvents.push(listOfEvents[i]);
         }
     }
-    //TODO: Sort by "start"
     return matchingEvents.sort(function(a,b){return a.start - b.start});
 }
 
@@ -325,7 +324,6 @@ function eventsWithinDateRange(listOfEvents,earliest,latest) {
 // separate executable "getandparseice.js" but more useful for embedded servers
 // as a suite of functions here.
 //
-
 
 
 //This is the master function, which has to be Async because everything else under it is async.
@@ -421,13 +419,16 @@ function extractEventsFromCal(data,calName) {
                 //Determine duration (in minutes) - AFTER CHECKING THERE IS AN END TIME!
                 if(ev.hasOwnProperty('start') && ev.hasOwnProperty('end')) {
                     var duration = ev.end.getTime() - ev.start.getTime();
-                    //evDets.duration = duration / 1000;
+                    //ONLY insert this if there's an rrule, to make repeating end time calcs easier later 
+                    if(ev.hasOwnProperty('rrule')) {
+                        evDets.duration = duration / 1000;
+                    }
                     evDets.end = ev.end;
                 } else {
                     //evDets.duration = 0;
                     evDets.end = ev.start
                 }
-               
+
                 //MCE 2017-12-28 - Handle EXDATE exclusions if they exist. Object ev.exdate may be a
                 //                 singleton (single-instance with a "params" and "val") or an array of
                 //                 params/val objects. Or may not exist at all.
