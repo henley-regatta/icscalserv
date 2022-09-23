@@ -49,7 +49,7 @@ However, a suitable minimal demo is possible using the file
 
 ```json
 {
-    "MinFileAgeBeforeRefreshHrs"    :   4,
+    "MinDataAgeBeforeRefreshHrs"    :   4,
     "ServerListenPort"              :   24611,
     "MaxEventLookBackDays"          :   14,
     "MaxEventLookAheadDays"         :   90,
