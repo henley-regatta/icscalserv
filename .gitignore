@@ -3,6 +3,7 @@
 *.pyc
 *.ics
 *.previous
+configdata.json*
 
 ##BUT override to ensure package.json gets loaded
 !package.json
